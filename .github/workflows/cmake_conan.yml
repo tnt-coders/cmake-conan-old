@@ -4,11 +4,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-2025, macos-15, ubuntu-latest]
+        os: [windows-2025, macos-15, ubuntu-24.04]
         include:
           - os: windows-2025
           - os: macos-15
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: ilammy/msvc-dev-cmd@v1
@@ -22,7 +22,7 @@ jobs:
           python-version: "3.10"
       - name: Install libc++ on Ubuntu
         run: sudo apt-get update && sudo apt-get install -y libc++-dev libc++abi-dev
-        if: ${{ matrix.os == 'ubuntu-latest' }}
+        if: ${{ matrix.os == 'ubuntu-24.04' }}
       - name: Install autotools on macOS
         run: brew install automake
         if: ${{ matrix.os == 'macos-15' }}
@@ -36,7 +36,7 @@ jobs:
       - name: Run Tests
         run: pytest -rA -v
   example:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4.2.2
       - name: Setup Python
