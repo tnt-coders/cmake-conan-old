@@ -104,6 +104,14 @@ function(package_add_executable target)
     _package_check_initialized()
 
     add_executable(${target} ${ARGN})
+
+    # Executables don't need to publicly expose headers so all headers are private
+    target_include_directories(${target}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
     set_property(GLOBAL APPEND PROPERTY ${PROJECT_NAME}_TARGETS ${target})
 endfunction()
 
@@ -116,6 +124,8 @@ function(package_add_library target)
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
 
     message("SETTING INCLUDE DIRECTORY: ${CMAKE_CURRENT_SOURCE_DIR}/include")
