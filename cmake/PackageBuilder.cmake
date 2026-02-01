@@ -154,14 +154,14 @@ function(package_install)
                 TARGETS ${targets}
                 EXPORT ${PROJECT_NAME}Targets
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-                #COMPONENT Development
+                COMPONENT Development
                 INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-                #COMPONENT Development
+                COMPONENT Development
                 LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-                #COMPONENT Runtime
-                #NAMELINK_COMPONENT Development
-                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-                #COMPONENT Runtime)
+                COMPONENT Runtime
+                NAMELINK_COMPONENT Development
+                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+                COMPONENT Runtime)
 
         # Install the export package
         install(
