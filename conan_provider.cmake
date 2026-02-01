@@ -461,6 +461,15 @@ endfunction()
 
 
 function(conan_install)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/conanfile.txt")
+        message(STATUS "Found conanfile.txt")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/conanfile.py")
+        message(STATUS "Found conanfile.py")
+    else()
+        # No conanfile, skip install
+        return()
+    endif()
+
     set(conan_output_folder ${CMAKE_BINARY_DIR}/conan)
     # Invoke "conan install" with the provided arguments
     set(conan_args -of=${conan_output_folder})
