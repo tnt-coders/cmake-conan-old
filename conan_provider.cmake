@@ -624,6 +624,9 @@ macro(conan_provide_dependency method package_name)
             # Parse creatable requirements from conanfile.py
             string(REGEX MATCHALL "[^\n#]*self[.]requires[^\n]*" _recipe_matches "${outfile}")
             foreach(_recipe_match IN LISTS _recipe_matches)
+
+                # Match: self.requires("package/version@user/channel") #recipe: https://repo.git
+                # user and channel are optional
                 string(
                     REGEX MATCH
                     "self[.]requires[(]\"(([^/]+)/([0-9.]+)([@]([^/\"]+)(/([^\"]+))?[^\"]*)?)\"[)].*[#].*recipe:.*(https://[^ ]+[.]git)"
@@ -668,7 +671,8 @@ macro(conan_provide_dependency method package_name)
                         continue()
                     endif()
                     
-                    # Match: package/version # https://repo.git
+                    # Match: package/version@user/channel #recipe: https://repo.git
+                    # user and channel are optional
                     string(
                         REGEX MATCH
                         "(([^/#@]+)/([0-9.]+)([@]([^/#]+)(/([^#]+))?)?).*[#].*recipe:.*(https://[^ ]+[.]git)"
