@@ -70,12 +70,14 @@ When cmake-conan encounters a missing package with a `#recipe:` annotation, it w
 
 ### Version Resolution: Tags vs Branches
 
-The Git ref (tag or branch name) is automatically derived from the conan package version in the `requires` statement:
+The Git ref is automatically derived from the conan package version in the `requires` statement. If the version starts with a number, it is assumed to be a semver version string and a `v` prefix is added when searching for the ref in Git:
 
-| Version Format | Git Ref Type | Example |
-|----------------|--------------|---------|
-| Starts with a number (e.g., `1.2.3`) | Tag with `v` prefix | `v1.2.3` |
-| Starts with a letter (e.g., `develop`) | Branch name (used as-is) | `develop` |
+| Version | Derived Git Ref |
+|---------|-----------------|
+| `1.2.3` | `v1.2.3` |
+| `develop` | `develop` |
+
+The derived ref is then checked against the repository—first for a matching tag, then for a matching branch. The ref's behavior depends on what exists in the repository:
 
 **Tags (Recommended):** Version tags are assumed to be immutable and are the preferred method. They minimize build times and preserve maximum reproducibility. Once a tagged package is built and cached, it will not be rebuilt.
 
