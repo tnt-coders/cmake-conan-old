@@ -540,7 +540,7 @@ function(conan_create)
 
     set(create_package FALSE)
     if(NOT cache_exists AND NOT remote_exists)
-        message(STATUS "CMake-Conan: ${args_CONAN_REF} does not exist in cache or any known remote... attempting to create from source.")
+        message(STATUS "CMake-Conan: \"${args_CONAN_REF}\" not found in cache or any known remote... attempting to create from source.")
         set(create_package TRUE)
 
     # Treat packages published to remotes as stable
@@ -596,14 +596,17 @@ function(conan_create)
 
                 # Compare hashes
                 if("${git_local_hash}" STREQUAL "${git_remote_hash}")
-                    message(STATUS "CMake-Conan: Previously built package for \"${args_CONAN_REF}\" is up to date. (Conan package will not be recreated)")
+                    message(STATUS "CMake-Conan: Previously built recipe for \"${args_CONAN_REF}\" is up to date. (Conan package will not be recreated)")
                     return()
+                else()
+                    message(WARNING "CMake-Conan: Previously built recipe for \"${args_CONAN_REF}\" is out of date. (Conan package will be recreated)")
                 endif()
+            else()
+                message(WARNING "CMake-Conan: A cached package for \"${args_CONAN_REF}\" exists, "
+                                "but the supplied version \"${args_VERSION}\" does not match a stable Git tag. "
+                                "\"${args_CONAN_REF}\" will be rebuilt from source to ensure consistency, "
+                                "as the source may have changed since it was published to the cache.")
             endif()
-
-            message(WARNING "CMake-Conan: A cached package for \"${args_CONAN_REF}\" exists, "
-                            "but the supplied version \"${args_VERSION}\" does not match a stable Git tag."
-                            "${args_CONAN_REF} will be rebuilt from source to ensure consistency, as the source may have changed since the last build.")
 
             # Remove the existing package from the local cache
             execute_process(
@@ -635,7 +638,9 @@ function(conan_create)
 
         # Fetch the content from git
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch ${args_GIT_REF} --recurse-submodules ${args_GIT_REPOSITORY} ${recipe_path}
+            COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch ${args_GIT_REF} --recurse-submodules
+                    -c advice.detachedHead=false
+                    ${args_GIT_REPOSITORY} ${recipe_path}
             RESULT_VARIABLE return_code
             OUTPUT_VARIABLE git_stdout
             ERROR_VARIABLE git_stderr
