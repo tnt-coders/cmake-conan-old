@@ -36,7 +36,7 @@ cmake_policy(PUSH)
 cmake_minimum_required(VERSION 3.24)
 
 # Required to create dependencies from recipe
-find_package(Git REQUIRED)
+find_package(Git REQUIRED BYPASS_PROVIDER)
 
 function(detect_os os os_api_level os_sdk os_subsystem os_version)
     # it could be cross compilation
@@ -461,51 +461,212 @@ function(conan_profile_detect_default)
     endif()
 endfunction()
 
+
+# Function to check if a conan package exists in the local cache or in any known remote
+function(conan_package_exists package_ref cache_found_var remote_found_var)
+    # Check local cache first
+    execute_process(
+        COMMAND conan list ${package_ref}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE)
+
+    # Check if output contains "not found" error
+    if(result EQUAL 0 AND NOT output MATCHES "ERROR.*not found" AND NOT error MATCHES "ERROR.*not found")
+        set(${cache_found_var} TRUE PARENT_SCOPE)
+    else()
+        set(${cache_found_var} FALSE PARENT_SCOPE)
+    endif()
+
+    # If not in cache, check all known remotes
+    execute_process(
+        COMMAND conan list ${package_ref} -r=*
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE)
+
+    # Check if output contains "not found" error
+    if(result EQUAL 0 AND NOT output MATCHES "ERROR.*not found" AND NOT error MATCHES "ERROR.*not found")
+        set(${remote_found_var} TRUE PARENT_SCOPE)
+    else()
+        set(${remote_found_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+
 function(conan_create)
     set(options)
-    set(one_value_args NAME VERSION USER CHANNEL GIT_REPOSITORY)
+    set(one_value_args NAME VERSION USER CHANNEL CONAN_REF GIT_REPOSITORY GIT_REF)
     set(multi_value_args CONAN_CREATE_ARGS)
     cmake_parse_arguments(args "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
     set(recipe_path ${CMAKE_BINARY_DIR}/conan/_recipes/${args_NAME})
 
-    # Remove the corresponding recipe if one already exists
-    if(EXISTS ${recipe_path})
-        file(REMOVE_RECURSE ${recipe_path})
-    endif()
+    # Check if the package already exists in the local cache or in a known remote
+    message(STATUS "CMake-Conan: Checking cache and remotes for existing package \"${args_CONAN_REF}\"")
+    conan_package_exists(${args_CONAN_REF} cache_exists remote_exists)
 
-    # Fetch the content from git
+    # Check if the provided git_ref is a tag (tags are treated as stable so conan create will not re-run)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch v${args_VERSION} --recurse-submodules ${args_GIT_REPOSITORY} ${recipe_path}
+        COMMAND git ls-remote --tags ${args_GIT_REPOSITORY} ${args_GIT_REF}
         RESULT_VARIABLE return_code
-        OUTPUT_VARIABLE git_stdout
+        OUTPUT_VARIABLE git_tag_exists
         ERROR_VARIABLE git_stderr
-        ECHO_ERROR_VARIABLE    # show the text output regardless
+        ECHO_ERROR_VARIABLE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
     if(NOT "${return_code}" STREQUAL "0")
-        message(FATAL_ERROR "CMake-Conan: Failed to checkout tag v${args_VERSION} from ${args_GIT_REPOSITORY}")
+        message(FATAL_ERROR "CMake-Conan: Failed to query tag information from ${args_GIT_REPOSITORY}")
     endif()
 
-    set(reference_args "--name=${args_NAME}" "--version=${args_VERSION}")
-    if(args_USER)
-        list(APPEND reference_args "--user=${args_USER}")
-        if(args_CHANNEL)
-            list(APPEND reference_args "--channel=${args_CHANNEL}")
+    # Check if the provided git_ref is a branch (branches are treated as unstable so conan create will re-run)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} ls-remote --heads ${args_GIT_REPOSITORY} ${args_GIT_REF}
+        RESULT_VARIABLE return_code
+        OUTPUT_VARIABLE git_branch_exists
+        ERROR_VARIABLE git_stderr
+        ECHO_ERROR_VARIABLE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+    if(NOT "${return_code}" STREQUAL "0")
+        message(FATAL_ERROR "CMake-Conan: Failed to query branch information from ${args_GIT_REPOSITORY}")
+    endif()
+
+    set(create_package FALSE)
+    if(NOT cache_exists AND NOT remote_exists)
+        message(STATUS "CMake-Conan: ${args_CONAN_REF} does not exist in cache or any known remote... attempting to create from source.")
+        set(create_package TRUE)
+
+    # Treat packages published to remotes as stable
+    elseif(remote_exists)
+        message(STATUS "CMake-Conan: Existing package for \"${args_CONAN_REF}\" found in available remotes!")
+        return()
+
+    # Treat packages published to the cache as unstable unless they match a stable Git tag
+    elseif(cache_exists)
+
+        # Do not recreate the package if it exists and the git ref is a tag
+        if(git_tag_exists)
+            message(STATUS "CMake-Conan: Existing stable package for \"${args_CONAN_REF}\" found in the local cache!")
+            return()
+        endif()
+
+        # If the recipe comes from a branch, treat it as unstable and recreate the package
+        if(git_branch_exists)
+
+            # If the recipe was recently generated locally, check if the git branch has been updated on the remote
+            if(EXISTS ${recipe_path})
+
+                # Get local commit hash for the branch/tag
+                execute_process(
+                    COMMAND ${GIT_EXECUTABLE} rev-parse ${args_GIT_REF}
+                    RESULT_VARIABLE return_code
+                    OUTPUT_VARIABLE git_local_hash
+                    ERROR_VARIABLE git_stderr
+                    ECHO_ERROR_VARIABLE    # show the text output regardless
+                    WORKING_DIRECTORY ${recipe_path}
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+                if(NOT "${return_code}" STREQUAL "0" OR NOT git_local_hash)
+                    message(FATAL_ERROR "CMake-Conan: Failed to establish local Git hash for \"${args_GIT_REF}\" in ${recipe_path}")
+                endif()
+
+                # Get remote commit hash for the same branch/tag
+                execute_process(
+                    COMMAND git ls-remote ${args_GIT_REPOSITORY} ${args_GIT_REF}
+                    RESULT_VARIABLE return_code
+                    OUTPUT_VARIABLE git_remote_output
+                    ERROR_VARIABLE git_stderr
+                    ECHO_ERROR_VARIABLE    # show the text output regardless
+                    WORKING_DIRECTORY ${recipe_path}
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+                # ls-remote returns "<hash>\t<ref>", we need just the hash
+                string(REGEX MATCH "^[0-9a-fA-F]+" git_remote_hash "${git_remote_output}")
+
+                if(NOT "${return_code}" STREQUAL "0" OR NOT git_remote_hash)
+                    message(FATAL_ERROR "CMake-Conan: Failed to establish remote Git hash for \"${args_GIT_REF}\" in ${args_GIT_REPOSITORY}")
+                endif()
+
+                # Compare hashes
+                if("${git_local_hash}" STREQUAL "${git_remote_hash}")
+                    message(STATUS "CMake-Conan: Previously built package for \"${args_CONAN_REF}\" is up to date. (Conan package will not be recreated)")
+                    return()
+                endif()
+            endif()
+
+            message(WARNING "CMake-Conan: A cached package for \"${args_CONAN_REF}\" exists, "
+                            "but the supplied version \"${args_VERSION}\" does not match a stable Git tag."
+                            "${args_CONAN_REF} will be rebuilt from source to ensure consistency, as the source may have changed since the last build.")
+
+            # Remove the existing package from the local cache
+            execute_process(
+                COMMAND ${CONAN_COMMAND} remove ${args_CONAN_REF} --confirm
+                RESULT_VARIABLE return_code
+                OUTPUT_VARIABLE conan_stdout
+                ERROR_VARIABLE conan_stderr
+                ECHO_ERROR_VARIABLE)
+
+            if(NOT "${return_code}" STREQUAL "0")
+                message(FATAL_ERROR "CMake-Conan: Failed to remove existing package \"${args_CONAN_REF}\" from the local cache.")
+            endif()
+
+            set(create_package TRUE)
+        else()
+            message(WARNING "CMake-Conan: A cached package for \"${args_CONAN_REF}\" exists, "
+                            "but the provided recipe does not have a matching Git tag or branch \"${args_GIT_REF}\". "
+                            "The cached package will be used, but its integrity cannot be verified.")
         endif()
     endif()
 
-    # # Run conan create
-    execute_process(
-        COMMAND ${CONAN_COMMAND} create ${recipe_path} ${reference_args} ${args_CONAN_CREATE_ARGS}
-        RESULT_VARIABLE return_code
-        OUTPUT_VARIABLE conan_stdout
-        ERROR_VARIABLE conan_stderr
-        ECHO_ERROR_VARIABLE    # show the text output regardless
-        WORKING_DIRECTORY ${recipe_path})
+    # Create the package
+    if(create_package)
 
-    if(NOT "${return_code}" STREQUAL "0")
-        message(FATAL_ERROR "Conan create failed='${return_code}'")
+        # Remove the corresponding recipe if one already exists
+        if(EXISTS ${recipe_path})
+            file(REMOVE_RECURSE ${recipe_path})
+        endif()
+
+        # Fetch the content from git
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} clone --depth 1 --branch ${args_GIT_REF} --recurse-submodules ${args_GIT_REPOSITORY} ${recipe_path}
+            RESULT_VARIABLE return_code
+            OUTPUT_VARIABLE git_stdout
+            ERROR_VARIABLE git_stderr
+            ECHO_ERROR_VARIABLE    # show the text output regardless
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+        if(NOT "${return_code}" STREQUAL "0")
+            message(FATAL_ERROR "CMake-Conan: Failed to checkout ${args_GIT_REF} from ${args_GIT_REPOSITORY}")
+        endif()
+
+        # Build args for conan create
+        set(reference_args "--name=${args_NAME}" "--version=${args_VERSION}")
+        if(args_USER)
+            list(APPEND reference_args "--user=${args_USER}")
+            if(args_CHANNEL)
+                list(APPEND reference_args "--channel=${args_CHANNEL}")
+            endif()
+        endif()
+
+        # Run conan create to create the package
+        execute_process(
+            COMMAND ${CONAN_COMMAND} create ${recipe_path} ${reference_args} ${args_CONAN_CREATE_ARGS}
+            RESULT_VARIABLE return_code
+            OUTPUT_VARIABLE conan_stdout
+            ERROR_VARIABLE conan_stderr
+            ECHO_ERROR_VARIABLE    # show the text output regardless
+            WORKING_DIRECTORY ${recipe_path})
+
+        if(NOT "${return_code}" STREQUAL "0")
+            message(FATAL_ERROR "Conan create failed='${return_code}'")
+        endif()
     endif()
 endfunction()
 
@@ -592,42 +753,6 @@ function(conan_version_check)
     endif()
 endfunction()
 
-# Function to check if a conan package exists in the local cache or in any known remote
-function(conan_package_exists package_ref out_var)
-    # Check local cache first
-    execute_process(
-        COMMAND conan list ${package_ref}
-        RESULT_VARIABLE result
-        OUTPUT_VARIABLE output
-        ERROR_VARIABLE error
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_STRIP_TRAILING_WHITESPACE
-    )
-    
-    # Check if output contains "not found" error
-    if(result EQUAL 0 AND NOT output MATCHES "ERROR.*not found" AND NOT error MATCHES "ERROR.*not found")
-        set(${out_var} TRUE PARENT_SCOPE)
-        return()
-    endif()
-    
-    # If not in cache, check all known remotes
-    execute_process(
-        COMMAND conan list ${package_ref} -r=*
-        RESULT_VARIABLE result
-        OUTPUT_VARIABLE output
-        ERROR_VARIABLE error
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_STRIP_TRAILING_WHITESPACE
-    )
-    
-    # Check if output contains "not found" error
-    if(result EQUAL 0 AND NOT output MATCHES "ERROR.*not found" AND NOT error MATCHES "ERROR.*not found")
-        set(${out_var} TRUE PARENT_SCOPE)
-    else()
-        set(${out_var} FALSE PARENT_SCOPE)
-    endif()
-endfunction()
-
 
 macro(construct_profile_argument argument_variable profile_list)
     set(${argument_variable} "")
@@ -679,7 +804,7 @@ macro(conan_provide_dependency method package_name)
                 # user and channel are optional
                 string(
                     REGEX MATCH
-                    "self[.]requires[(]\"(([^/]+)/([0-9.]+)([@]([^/\"]+)(/([^\"]+))?[^\"]*)?)\"[)].*[#].*recipe:.*(https://[^ ]+[.]git)"
+                    "self[.]requires[(]\"(([^/]+)/([^@]+)([@]([^/\"]+)(/([^\"]+))?[^\"]*)?)\"[)].*[#].*recipe:.*(https://[^ ]+[.]git)"
                     _recipe_found
                     "${_recipe_match}"
                 )
@@ -725,7 +850,7 @@ macro(conan_provide_dependency method package_name)
                     # user and channel are optional
                     string(
                         REGEX MATCH
-                        "(([^/#@]+)/([0-9.]+)([@]([^/#]+)(/([^#]+))?)?).*[#].*recipe:.*(https://[^ ]+[.]git)"
+                        "(([^/#@]+)/([^@]+)([@]([^/#]+)(/([^#]+))?)?).*[#].*recipe:.*(https://[^ ]+[.]git)"
                         _recipe_found
                         "${_requirement_line}"
                     )
@@ -749,6 +874,32 @@ macro(conan_provide_dependency method package_name)
             endif()
             set(generator "-g;CMakeDeps")
         endif()
+
+        # Check remotes and cache for packages that can be recreated from git
+        # NOTE: Only create packages once even if the project is multiconfig (default to Release build type, others will be created during install if needed)
+        foreach(_recipe IN LISTS _recipes)
+            message(STATUS "CMake-Conan: Found recipe for ${_recipe_${_recipe}_ref}: ${_recipe_${_recipe}_repo}")
+
+            # If the version starts with a number add a "v" prefix when looking for the tag in Git.
+            # It is standard practice to tag numbered versions in Git with a "v" prefix (for example v1.0.0)
+            set(_git_ref ${_recipe_${_recipe}_version})
+            if(_git_ref MATCHES "^[0-9]")
+                set(_git_ref "v${_git_ref}")
+            endif()
+
+            # Create the package from source
+            # Does not recreate package if it already exists -- unless the supplied git ref is not a stable tag
+            conan_create(
+                NAME ${_recipe}
+                VERSION ${_recipe_${_recipe}_version}
+                USER ${_recipe_${_recipe}_user}
+                CHANNEL ${_recipe_${_recipe}_channel}
+                CONAN_REF ${_recipe_${_recipe}_ref}
+                GIT_REPOSITORY ${_recipe_${_recipe}_repo}
+                GIT_REF ${_git_ref}
+                CONAN_CREATE_ARGS ${_host_profile_flags} ${_build_profile_flags} -s build_type=Release ${_self_build_config} ${CONAN_INSTALL_ARGS}
+            )
+        endforeach()
 
         get_property(_multiconfig_generator GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
         
@@ -777,29 +928,6 @@ macro(conan_provide_dependency method package_name)
             if(NOT _multiconfig_generator AND NOT _build_config STREQUAL "${CMAKE_BUILD_TYPE}")
                 set(_self_build_config -s &:build_type=${CMAKE_BUILD_TYPE})
             endif()
-
-            # Check remotes and cache for packages that can be recreated from git
-
-            # TODO THIS IS NOT WORKING
-
-            foreach(_recipe IN LISTS _recipes)
-                message(STATUS "CMake-Conan: Found recipe for ${_recipe_${_recipe}_ref}: ${_recipe_${_recipe}_repo}")
-
-                conan_package_exists(${_recipe_${_recipe}_ref} _recipe_${_recipe}_exists)
-                if(NOT _recipe_${_recipe}_exists)
-                    message(STATUS "CMake-Conan: ${_recipe_${_recipe}_ref} does not exist in cache or any known remote... attempting to create from source.")
-
-                    # Create the package from source
-                    conan_create(
-                        NAME ${_recipe}
-                        VERSION ${_recipe_${_recipe}_version}
-                        USER ${_recipe_${_recipe}_user}
-                        CHANNEL ${_recipe_${_recipe}_channel}
-                        GIT_REPOSITORY ${_recipe_${_recipe}_repo}
-                        CONAN_CREATE_ARGS ${_host_profile_flags} ${_build_profile_flags} -s build_type=${_build_config} ${_self_build_config} ${CONAN_INSTALL_ARGS}
-                    )
-                endif()
-            endforeach()
 
             conan_install(${_host_profile_flags} ${_build_profile_flags} -s build_type=${_build_config} ${_self_build_config} ${CONAN_INSTALL_ARGS} ${generator})
         endforeach()
