@@ -887,6 +887,7 @@ macro(conan_provide_dependency method package_name)
 
             # If the version starts with a number add a "v" prefix when looking for the tag in Git.
             # It is standard practice to tag numbered versions in Git with a "v" prefix (for example v1.0.0)
+            # TODO: Enhance regex to properly parse full semver strings instead of relying on just the first character
             set(_git_ref ${_recipe_${_recipe}_version})
             if(_git_ref MATCHES "^[0-9]")
                 set(_git_ref "v${_git_ref}")
