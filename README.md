@@ -42,9 +42,9 @@ cmake --build build --config Release
 
 ### Building package recipes from Git
 
-**Can't find your package on ConanCenter or any configured remote? cmake-conan has you covered!**
+**Required package unavailable on ConanCenter or any configured remote? Not even in your local cache!? cmake-conan has you covered!**
 
-If a required package is not available in any configured Conan remote or in your local cache, cmake-conan can automatically fetch the recipe from a Git repository and build it from source. This is useful for private packages or packages not yet published to a remote.
+When a required package can't be found in any configured Conan remote and also isn't in your local cache, cmake-conan can automatically fetch the recipe from a Git repository and build it from source. This is useful for private packages or packages not yet published to a remote.
 
 To enable this feature, add a `#recipe:` comment after the requirement specifying the Git repository URL:
 
