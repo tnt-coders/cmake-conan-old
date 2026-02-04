@@ -89,7 +89,7 @@ If the package version string does not resolve to a valid Git tag/branch name, C
 ### Tag Immutability
 
 > [!CAUTION]
-> **Tags are assumed to be immutable.** If a tag is moved after a package has already been published to the cache (generally considered bad practice), you must manually remove the associated package from the cache with `conan remove <package_ref>` to force a rebuild.
+> **Tags are assumed to be immutable.** Be cautious when moving tags in Git. Moving tags is considered bad practice and will not trigger a rebuild if a package with the same version is already in the cache. If this happens, you must manually remove the package from the cache with `conan remove <package_ref>` to force a rebuild.
 
 ## Known limitations with Conan 2.0
 
